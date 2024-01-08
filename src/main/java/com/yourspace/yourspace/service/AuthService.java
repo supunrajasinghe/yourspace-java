@@ -1,6 +1,11 @@
 package com.yourspace.yourspace.service;
 
 import com.yourspace.yourspace.model.AuthRequest;
+import com.yourspace.yourspace.model.JwtResponse;
+import com.yourspace.yourspace.model.RefreshToken;
+import com.yourspace.yourspace.model.RefreshTokenRequest;
+import com.yourspace.yourspace.repository.RefreshTokenRepository;
+import com.yourspace.yourspace.repository.UserRepository;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.io.Decoders;
@@ -24,15 +29,24 @@ import static com.yourspace.yourspace.service.JwtService.SECRET;
 public class AuthService {
 
     private final AuthenticationManager authenticationManager;
+    private final RefreshTokenService refreshTokenService;
+    private final RefreshTokenRepository refreshTokenRepository;
+    private final UserRepository userRepository;
 
-    public String login(AuthRequest authRequest) {
+    public JwtResponse login(AuthRequest authRequest) {
         Authentication authenticate = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(authRequest.getUsername(), authRequest.getPassword())
         );
         if(!authenticate.isAuthenticated()) {
             throw new UsernameNotFoundException("Invalid user request");
         }
-        return generateToken(authRequest.getUsername());
+
+        RefreshToken refreshToken = refreshTokenService.createRefreshToken(authRequest.getUsername());
+        String accessToken = generateToken(authRequest.getUsername());
+        return JwtResponse.builder()
+                .accessToken(accessToken)
+                .refreshToken(refreshToken.getToken())
+                .build();
     }
 
     private String generateToken(String email) {
@@ -53,5 +67,19 @@ public class AuthService {
     private Key generateSignKey() {
         byte[] keyBytes = Decoders.BASE64.decode(SECRET);
         return Keys.hmacShaKeyFor(keyBytes);
+    }
+
+    public JwtResponse refreshToken(RefreshTokenRequest refreshTokenRequest) {
+        return refreshTokenRepository.findByToken(refreshTokenRequest.getToken())
+                .map(refreshTokenService::verifyExpiration)
+                .map(RefreshToken::getUserId)
+                .map(userRepository::findById)
+                .map(user -> {
+                    if(user.isEmpty()) throw new RuntimeException("User not found");
+                    return JwtResponse.builder()
+                            .accessToken(generateToken(user.get().getEmail()))
+                            .refreshToken(refreshTokenRequest.getToken())
+                            .build();
+                }).orElseThrow(() -> new RuntimeException("Token not found"));
     }
 }
